@@ -112,7 +112,6 @@ module.exports = function(file, api, options) {
 					'value' in prop && prop.value.type === 'Identifier'
 				);
 			});
-
 			literalProps = objectExpression.properties.filter(function(prop) {
 				return (
 					// Ignore computed property keys
@@ -125,21 +124,25 @@ module.exports = function(file, api, options) {
 			});
 		});
 
-		var declaredNamedExportDeclaration = createDeclaredNamedExportDeclaration(exportRef, defaultExportName, literalProps);
-		if (declaredNamedExportDeclaration !== null) {
+		var declaredNamedExportDeclarations = createDeclaredNamedExportDeclaration(exportRef, defaultExportName, literalProps);
+		for (var declaredNamedExportDeclaration of (declaredNamedExportDeclarations|| []).reverse()){
 			exportRef.insertAfter(declaredNamedExportDeclaration);
 		}
 
 		var specifiedNamedExportDeclaration = createSpecificedNamedExportDeclaration(exportRef, defaultExportName, referenceProps);
-		if (specifiedNamedExportDeclaration !== null) {
+		if (specifiedNamedExportDeclaration){
 			exportRef.insertAfter(specifiedNamedExportDeclaration);
 		}
 	}
 
-	function generateDefaultExportName() {
+	function generateDefaultExportName(start) {
 		var prefix = 'exported';
 		var index = 2;
 		var name = prefix;
+		if (start) {
+			index = Number.parseInt(start.substring(prefix.length))|| 1
+			++index
+		}
 		while (root.find(j.Identifier, { name: name }).length > 0) {
 			name = prefix + index;
 			index++;
@@ -152,28 +155,27 @@ module.exports = function(file, api, options) {
 			return null;
 		}
 
-		var exportNames = props.map(function(prop) {
-			return prop.key.type === 'Literal' ?
-				prop.key.value :
-				prop.key.name;
-		});
+		var properties = props.filter(function(prop) {
+			var key = prop.key.type === 'Literal' ?  prop.key.value : prop.key.name;
+			return shouldCreateNamedExport(defaultExportName, key);
+		})
 
-		var properties = exportNames.filter(function(name) {
-			return shouldCreateNamedExport(defaultExportName, name)
-		}).map(function(name) {
-			var prop = j.property('init', j.identifier(name), j.identifier(name));
-			prop.shorthand = true;
-			return prop;
-		});
-		var exportNamedDeclaration = j.exportNamedDeclaration(
-			j.variableDeclaration('const', [
-				j.variableDeclarator(
-					j.objectPattern(properties),
-					exportRef.value.declaration
-				)
-			])
-		);
-		return exportNamedDeclaration;
+		// => const exported3 = exported2.oneProperty
+		var generatedName = defaultExportName;
+		var generatedVariableDeclarators = properties.map(function(prop) {
+			var key = prop.key.type === 'Literal' ?  prop.key.value : prop.key.name;
+			generatedName = generateDefaultExportName(generatedName);
+			return j.variableDeclarator(j.identifier(generatedName), j.memberExpression(j.identifier(defaultExportName), j.identifier(key), false));
+		})
+		var generatedDeclarations= j.variableDeclaration('const', generatedVariableDeclarators);
+
+		// => export { exported3 as oneProperty }
+		var specifiers = properties.map(function(prop, i){
+			var key = prop.key.type === 'Literal' ?  prop.key.value : prop.key.name;
+			return j.exportSpecifier(generatedVariableDeclarators[i].id, j.identifier(key));
+		})
+		var exportNamedDeclaration= j.exportNamedDeclaration(null, specifiers);
+		return [generatedDeclarations, exportNamedDeclaration];
 	}
 
 	function createSpecificedNamedExportDeclaration(exportRef, defaultExportName, props) {
